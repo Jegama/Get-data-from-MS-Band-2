@@ -7,7 +7,6 @@
  * ------------------------------------------------------------------------------------------------*/
 
 #import "RegisterNotificationViewController.h"
-#include <math.h>
 
 @interface RegisterNotificationViewController ()<MSBClientManagerDelegate, UITextViewDelegate, MFMailComposeViewControllerDelegate>
 {
@@ -108,7 +107,7 @@
     [self sampleDidCompleteWithOutput:@"GSR updates stopped..."];
     
     // Export arrays
-    NSMutableString *csv = [NSMutableString stringWithString:@"Time,HR,ST,GSR,Stress Level,Y/N Stress"];
+    NSMutableString *csv = [NSMutableString stringWithString:@"Time,HR,ST,GSR"];
     
     NSUInteger count = [timeArray count];
     for (NSUInteger i=0; i<count; i++ ) {
@@ -183,50 +182,26 @@
 
 - (void)startSensorsUpdates
 {
-    timeString = [[NSString alloc]init];
-    hrString = [[NSString alloc]init];
-    stString = [[NSString alloc]init];
-    gsrString = [[NSString alloc]init];
-    
-    timeArray = [[NSMutableArray alloc]init];
-    hrArray = [[NSMutableArray alloc]init];
-    stArray = [[NSMutableArray alloc]init];
-    gsrArray = [[NSMutableArray alloc]init];
-    
-    tempHR = 1;
-    tempST = 1;
-    tempGSR = 1;
-    
+    [self initializeSensorVariables];
     NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
     [dateFormatter setDateFormat:@"dd.MM.YY HH:mm:ss"];
-    NSDate *currentDate = [NSDate date];
-    NSString *dateString = [dateFormatter stringFromDate:currentDate];
-    
     [self output:@"The records started at:"];
-    [self output:dateString];
+    [self output:[dateFormatter stringFromDate:[NSDate date]]];
     
     
     
     // ------------------- Sensor: HR -------------------
     [self output:@"Starting HR updates..."];
-    void (^handler)(MSBSensorHeartRateData *, NSError *) = ^(MSBSensorHeartRateData *heartRateData, NSError *error) {
-        if (MSBSensorHeartRateQualityAcquiring) {
-            // Acquiring. Do nothing.
-        } else {
+    void (^handler)(MSBSensorHeartRateData *, NSError *) = ^(MSBSensorHeartRateData *heartRateData, NSError *error)
+    {
+        int cont = 0;
+        if (!MSBSensorHeartRateQualityAcquiring) {
             //Locked
-            [self output: [NSString stringWithFormat:@"Heart Rate: %3u bpm",
-                           (unsigned int)heartRateData.heartRate]];
-            if (heartRateData.heartRate < tempHR - 1) {
-                last_hr = 0;
-            } else if (heartRateData.heartRate > tempHR + 1) {
-                last_hr = 2;
-            } else {
-                last_hr = 1;
-            }
+            HR_out.text=[NSString stringWithFormat:@"%3u bpm",
+                         (unsigned int)heartRateData.heartRate];
+            last_hr = (heartRateData.heartRate < (tempHR - 1) ? 2 : (heartRateData.heartRate > (tempHR + 1) ? 0 : 1));
             tempHR = heartRateData.heartRate;
         }
-        
-        //NSLog(@"%@", heartRateData);
     };
     
     NSError *stateError;
@@ -238,16 +213,12 @@
     
     // ------------------- Sensor: ST -------------------
     [self output:@"Starting ST updates..."];
-    void (^handler2)(MSBSensorSkinTemperatureData *, NSError *) = ^(MSBSensorSkinTemperatureData *STData, NSError *error) {
-        [self output: [NSString stringWithFormat:@"Skin temperature: %3f ºC",
-                       (double)STData.temperature]];
-        if (STData.temperature < tempST - 1) {
-            last_st = 0;
-        } else if (STData.temperature > tempST + 1) {
-            last_st = 2;
-        } else {
-            last_st = 1;
-        }
+    void (^handler2)(MSBSensorSkinTemperatureData *, NSError *) = ^(MSBSensorSkinTemperatureData *STData, NSError *error)
+    {
+        ST_out.text=[NSString stringWithFormat:@"%3f ºC",
+                     (double)STData.temperature];
+        double tempF = tempST * (9/5) + 32;
+        last_st = (STData.temperature < (tempF - 1) ? 0 : (STData.temperature > (tempF + 1) ? 2 : 1));
         tempST =  STData.temperature;
     };
     
@@ -260,42 +231,74 @@
     
     // ------------------- Sensor: GSR -------------------
     [self output:@"Starting GSR updates..."];
-    void (^handler3)(MSBSensorGSRData *, NSError *error) = ^(MSBSensorGSRData *GSRData, NSError *error) {
-        [self output: [NSString stringWithFormat:@"GSR: %3u kOhm",
-                       (unsigned int)GSRData.resistance]];
-        if (GSRData.resistance < tempGSR - 1) {
-            last_gsr = 0;
-        } else if (GSRData.resistance > tempGSR + 1) {
-            last_gsr = 2;
-        } else {
-            last_gsr = 1;
+    
+    void (^handler3)(MSBSensorGSRData *, NSError *error) = ^(MSBSensorGSRData *GSRData, NSError *error)
+    {
+        if(frequencyGSR == 0) {
+            GSR_out.text=[NSString stringWithFormat:@"%3u kOhms",
+                          (unsigned int)GSRData.resistance];
+            last_gsr = (GSRData.resistance < (tempGSR - 100) ? 2 : (GSRData.resistance > (tempGSR + 100) ? 0 : 1));
+            tempGSR = GSRData.resistance;
+            
+            // Calculate Stress Level
+            double tempF = (tempST * (9/5) + 32); // C to F
+            double tempS = 1/tempGSR; // kOhms to S
+
+            [self registerData];
         }
-        tempGSR = GSRData.resistance;
-        
-        // Transform to string to save it to array
-        hrString = [NSString stringWithFormat:@"%3f", tempHR];
-        stString = [NSString stringWithFormat:@"%3f", tempST];
-        gsrString = [NSString stringWithFormat:@"%3f", tempGSR];
-        
-        // Add to array
-        [stArray addObject:stString];
-        [gsrArray addObject:gsrString];
-        [hrArray addObject:hrString];
-        NSDate *currentDate = [NSDate date];
-        timeString = [dateFormatter stringFromDate:currentDate];
-        [timeArray addObject:timeString];
+        frequencyGSR = (frequencyGSR + 1) % 4;
         
     };
-    
     NSError *stateError3;
     if (![self.client.sensorManager startGSRUpdatesToQueue:nil errorRef:&stateError3 withHandler:handler3])
     {
         [self sampleDidCompleteWithOutput:stateError3.description];
         return;
     }
+}
+
+// Manage variables
+
+- (void) initializeSensorVariables
+{
+    timeString = [[NSString alloc]init];
+    hrString = [[NSString alloc]init];
+    stString = [[NSString alloc]init];
+    gsrString = [[NSString alloc]init];
     
-    // Stop Updates after 20 minutes
-    // [self performSelector:@selector(stopSensorsUpdates) withObject:nil afterDelay:1200];
+    timeArray = [[NSMutableArray alloc]init];
+    hrArray = [[NSMutableArray alloc]init];
+    stArray = [[NSMutableArray alloc]init];
+    gsrArray = [[NSMutableArray alloc]init];
+    
+    tempHR = 0;
+    tempST = 0;
+    tempGSR = 0;
+    
+    tempCounter = 0;
+    frequencyGSR = 0;
+    tempNotif = 0;
+    flagNotif = false;
+    
+}
+
+-(void) registerData
+{
+    // Transform to string to save it to array
+    double tempS = 1/tempGSR;
+    NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
+    [dateFormatter setDateFormat:@"dd.MM.YY HH:mm:ss"];
+    hrString = [NSString stringWithFormat:@"%3f", tempHR];
+    stString = [NSString stringWithFormat:@"%3f", tempST];
+    gsrString = [NSString stringWithFormat:@"%3f", tempS];
+    timeString = [dateFormatter stringFromDate:[NSDate date]];
+    
+    // Add to array
+    [stArray addObject:stString];
+    [gsrArray addObject:gsrString];
+    [hrArray addObject:hrString];
+
+    [timeArray addObject:timeString];
 }
 
 
